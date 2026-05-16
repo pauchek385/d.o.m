@@ -14,6 +14,7 @@
   <script src="https://gstatic.com"></script>
   <script src="https://www.gstatic.com/firebasejs/10.3.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.3.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.3.1/firebase-firestore-compat.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
   <style>
     /* ========== СТИЛИ (всё из App.css) ========== */
@@ -522,6 +523,7 @@
       firebase.initializeApp(firebaseConfig);
     }
     const auth = firebase.auth();
+    const db = firebase.firestore();
     // Owner UID from Firebase — hardcoded protected owner account
     const OWNER_UID = 'iCKtMg2IL6OCNVTBag4hpSw4YbY2';
 
@@ -756,6 +758,16 @@
         const uid = fbUser?.uid;
         const assignedRole = uid === OWNER_UID ? 'owner' : 'user';
 
+        // Save to Firestore
+        try {
+          await db.collection("users").doc(uid).set({
+            email: email.trim(),
+            role: assignedRole
+          });
+        } catch (error) {
+          console.warn('Firestore save error:', error.message);
+        }
+
         // Создаём нового пользователя
         const newUser = {
           email: email.trim(),
@@ -773,7 +785,7 @@
         users.push(newUser);
         saveUsers(users);
         
-        // Сохраняем в Firebase параллельно
+        // Сохраняем в Firebase REST API параллельно
         saveUserToFirebase(newUser);
         
         setCurrentUser(newUser);
@@ -796,6 +808,24 @@
         const fbUser = auth.currentUser;
         const uid = fbUser?.uid;
 
+        let roleFromFirestore = 'user';
+        
+        // Check if this is the owner
+        if (uid === OWNER_UID) {
+          roleFromFirestore = 'owner';
+        } else {
+          // Fetch role from Firestore
+          try {
+            const userDoc = await db.collection("users").doc(uid).get();
+            if (userDoc.exists) {
+              const userData = userDoc.data();
+              roleFromFirestore = userData.role || 'user';
+            }
+          } catch (error) {
+            console.warn('Firestore fetch error:', error.message);
+          }
+        }
+
         const users = loadUsers();
         let user = users.find(u => u.email === email.trim() && u.password === password.trim());
         if (!user) {
@@ -805,7 +835,7 @@
             password: password.trim(),
             username: fallbackUsername,
             displayName: email.trim(),
-            role: uid === OWNER_UID ? 'owner' : 'user',
+            role: roleFromFirestore,
             uid: uid || null,
             score: 0,
             balance: 0,
@@ -816,9 +846,9 @@
           users.push(user);
           saveUsers(users);
         } else {
-          // If Firebase UID matches owner, ensure local user has owner role
-          if (uid === OWNER_UID && user.role !== 'owner') {
-            user.role = 'owner';
+          // Update role from Firestore
+          if (user.role !== roleFromFirestore) {
+            user.role = roleFromFirestore;
             user.uid = uid;
             saveUsers(users.map(u => u.email === user.email ? user : u));
           }
@@ -1381,6 +1411,14 @@
         }
         const updatedUsers = users.map(u => u.username === username ? { ...u, role: newRole } : u);
         saveUsers(updatedUsers);
+        
+        // Update in Firestore if uid exists
+        if (target.uid) {
+          db.collection("users").doc(target.uid).update({
+            role: newRole
+          }).catch(error => console.warn('Firestore update error:', error.message));
+        }
+        
         refreshUsers();
         if (username === currentUser.username) {
           const updatedCurrent = { ...currentUser, role: newRole };
