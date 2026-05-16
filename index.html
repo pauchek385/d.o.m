@@ -9,7 +9,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <!-- Babel для JSX -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-  <!-- Подключаем Firebase Core и Auth старым надежным способом -->
+  <!-- 1. ЦІ ДВА РЯДКИ ПЕРЕВІР В <HEAD> (під Babel) -->
   <script src="https://gstatic.com"></script>
   <script src="https://gstatic.com"></script>
   <script src="https://www.gstatic.com/firebasejs/10.3.1/firebase-app-compat.js"></script>
@@ -510,15 +510,16 @@
     // For Firebase JS SDK v7.20.0 and later, measurementId is optional
     const firebaseConfig = {
       apiKey: "AIzaSyAxRMjebhn73-Zw35dQ7CDr-vj7CVEAyH4",
-      authDomain: "dom1k-ec9a5.firebaseapp.com",
+      authDomain: "://firebaseapp.com",
       projectId: "dom1k-ec9a5",
       storageBucket: "dom1k-ec9a5.firebasestorage.app",
-      messagingSenderId: "305548987589",
-      appId: "1:305548987589:web:41a04a494342a0fb03b4ac",
-      measurementId: "G-4XG13BELG6"
+      messagingSenderId: "1305548987589",
+      appId: "1:1305548987589:web:41a04a4a94342a0fb03b4ac"
     };
 
-    firebase.initializeApp(firebaseConfig);
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
     const auth = firebase.auth();
 
     // --------------- localStorage helpers ---------------
