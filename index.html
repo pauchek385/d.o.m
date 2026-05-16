@@ -378,6 +378,7 @@
     .user-table th, .user-table td { padding:12px 15px; text-align:left; border-bottom:1px solid var(--border); }
     .user-table th { opacity:0.7; font-weight:600; text-transform:uppercase; font-size:0.85rem; }
     .role-badge { display:inline-block; padding:4px 10px; border-radius:20px; font-size:0.8rem; font-weight:600; }
+    .role-badge.owner { background:rgba(217,119,6,0.3); color:#fbbf24; }
     .role-badge.admin { background:rgba(168,85,247,0.2); color:var(--accent); }
     .role-badge.user { background:rgba(255,255,255,0.05); color:var(--text-secondary); }
     .actions-cell { display:flex; gap:8px; flex-wrap:wrap; }
@@ -521,6 +522,8 @@
       firebase.initializeApp(firebaseConfig);
     }
     const auth = firebase.auth();
+    // Owner UID from Firebase — hardcoded protected owner account
+    const OWNER_UID = 'iCKtMg2IL6OCNVTBag4hpSw4YbY2';
 
     // --------------- localStorage helpers ---------------
     const USERS_KEY = 'dom_users';
@@ -549,23 +552,8 @@
           }));
         } catch { return []; }
       }
-      // Owner UID from Firebase - special protected account
-      const OWNER_UID = 'iCKtMg2IL6OCNVTBag4hpSw4YbY2';
-      const defaultUsers = [{ 
-        email: 'owner@dom.local', 
-        username: 'Owner', 
-        displayName: 'Owner',
-        password: '', 
-        role: 'owner', 
-        score: 0, 
-        balance: 0, 
-        clan: null, 
-        muted: false, 
-        muteReason: '',
-        uid: OWNER_UID
-      }];
-      localStorage.setItem(USERS_KEY, JSON.stringify(defaultUsers));
-      return defaultUsers;
+        // No default users created here - rely on Firebase-authenticated users.
+        return [];
     };
 
     const saveUsers = (users) => localStorage.setItem(USERS_KEY, JSON.stringify(users));
@@ -763,13 +751,19 @@
           return;
         }
 
+        // Map Firebase UID to owner if it matches
+        const fbUser = auth.currentUser;
+        const uid = fbUser?.uid;
+        const assignedRole = uid === OWNER_UID ? 'owner' : 'user';
+
         // Создаём нового пользователя
         const newUser = {
           email: email.trim(),
           password: password.trim(),
           username: username.trim().toLowerCase(),
           displayName: displayName.trim(),
-          role: 'user',
+          role: assignedRole,
+          uid: uid || null,
           score: 0,
           balance: 0,
           clan: null,
@@ -799,6 +793,9 @@
           return;
         }
 
+        const fbUser = auth.currentUser;
+        const uid = fbUser?.uid;
+
         const users = loadUsers();
         let user = users.find(u => u.email === email.trim() && u.password === password.trim());
         if (!user) {
@@ -808,7 +805,8 @@
             password: password.trim(),
             username: fallbackUsername,
             displayName: email.trim(),
-            role: 'user',
+            role: uid === OWNER_UID ? 'owner' : 'user',
+            uid: uid || null,
             score: 0,
             balance: 0,
             clan: null,
@@ -817,6 +815,13 @@
           };
           users.push(user);
           saveUsers(users);
+        } else {
+          // If Firebase UID matches owner, ensure local user has owner role
+          if (uid === OWNER_UID && user.role !== 'owner') {
+            user.role = 'owner';
+            user.uid = uid;
+            saveUsers(users.map(u => u.email === user.email ? user : u));
+          }
         }
         setCurrentUser(user);
         onStart(user);
@@ -1322,11 +1327,56 @@
 
       const refreshUsers = () => setUsers(loadUsers());
 
+      // Role system: increasing rank = more privileges
+      const ROLE_RANK = {
+        player: 0,
+        ml_admin: 1,
+        st_admin: 2,
+        zga: 3,
+        ga: 4,
+        owner: 5,
+        // legacy alias
+        admin: 1
+      };
+
+      const ROLE_LABEL = {
+        player: 'Игрок',
+        ml_admin: 'Мл.Админ',
+        st_admin: 'Ст.Админ',
+        zga: 'З.Г.А',
+        ga: 'Г.А',
+        owner: 'Владелец',
+        admin: 'Админ'
+      };
+
+      const isAdminRole = (r) => ROLE_RANK[r] >= ROLE_RANK.ml_admin;
+
+      const canManage = (actorRole, targetRole, newRole) => {
+        // Owner can do anything
+        if (actorRole === 'owner') return true;
+        const actorRank = ROLE_RANK[actorRole] || 0;
+        const targetRank = ROLE_RANK[targetRole] || 0;
+        const newRank = ROLE_RANK[newRole] || 0;
+        // Actor must be strictly higher than target and strictly higher than the role they're assigning
+        return actorRank > targetRank && actorRank > newRank;
+      };
+
+      const availablePromotionRoles = (actorRole) => {
+        const actorRank = ROLE_RANK[actorRole] || 0;
+        return Object.keys(ROLE_RANK).filter(r => ROLE_RANK[r] < actorRank && r !== 'player');
+      };
+
       const handleChangeRole = (username, newRole) => {
         const target = users.find(u => u.username === username);
-        // Protect owner from role changes
-        if (target?.role === 'owner') {
+        if (!target) return;
+        // Protect owner from role changes unless actor is owner
+        if (target.role === 'owner' && currentUser.role !== 'owner') {
           setMessage('Нельзя изменить роль владельца');
+          return;
+        }
+        // Permission check
+        if (!canManage(currentUser.role, target.role, newRole)) {
+          setMessage('У вас недостаточно прав для изменения роли');
           return;
         }
         const updatedUsers = users.map(u => u.username === username ? { ...u, role: newRole } : u);
@@ -1337,18 +1387,20 @@
           setCurrentUser(updatedCurrent);
           onUserUpdate(updatedCurrent);
         }
-        setMessage(`Роль ${username} изменена`);
+        setMessage(`Роль ${username} изменена на ${ROLE_LABEL[newRole] || newRole}`);
       };
 
       const handleDeleteUser = (username) => {
         if (username === currentUser.username) { setMessage('Нельзя удалить себя'); return; }
         const target = users.find(u => u.username === username);
-        // Protect owner from deletion
-        if (target?.role === 'owner') {
-          setMessage('Нельзя удалить владельца');
+        if (!target) return;
+        // Protect owner
+        if (target.role === 'owner') { setMessage('Нельзя удалить владельца'); return; }
+        // Permission check
+        if (!canManage(currentUser.role, target.role, 'player')) {
+          setMessage('У вас недостаточно прав для удаления этого пользователя');
           return;
         }
-        if (target?.role === 'admin') { setMessage('Нельзя удалить админа'); return; }
         saveUsers(users.filter(u => u.username !== username));
         refreshUsers();
         setMessage(`Пользователь ${username} удалён`);
@@ -1368,8 +1420,12 @@
       const handleMute = (username) => {
         const target = users.find(u => u.username === username);
         // Protect owner from mute
-        if (target?.role === 'owner') {
+        if (target?.role === 'owner' && currentUser.role !== 'owner') {
           setMessage('Нельзя замутить владельца');
+          return;
+        }
+        if (!canManage(currentUser.role, target?.role, 'player')) {
+          setMessage('У вас недостаточно прав для мута');
           return;
         }
         const reason = prompt('Введите причину мута:');
@@ -1395,6 +1451,10 @@
         // Protect owner from unmute restrictions
         if (target?.role === 'owner' && target?.muted) {
           setMessage('Владелец не может быть замучен');
+          return;
+        }
+        if (!canManage(currentUser.role, target?.role, 'player')) {
+          setMessage('У вас недостаточно прав для размуты');
           return;
         }
         const updatedUser = users.find(u => u.username === username);
@@ -1455,6 +1515,8 @@
           {message && <div className="admin-message">{message}</div>}
           <div className="admin-tabs">
             <button className={`admin-tab ${activeTab === 'users' ? 'active' : ''}`} onClick={() => setActiveTab('users')}>👥 Пользователи</button>
+            <button className={`admin-tab ${activeTab === 'admins' ? 'active' : ''}`} onClick={() => setActiveTab('admins')}>🛡️ Админы</button>
+            <button className={`admin-tab ${activeTab === 'owner' ? 'active' : ''}`} onClick={() => setActiveTab('owner')}>👑 Владелец</button>
             <button className={`admin-tab ${activeTab === 'functions' ? 'active' : ''}`} onClick={() => setActiveTab('functions')}>⚙️ Функции</button>
             <button className={`admin-tab ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => setActiveTab('reports')}>📋 Репорты</button>
           </div>
@@ -1478,13 +1540,13 @@
                     if (a.role === 'owner') return -1;
                     if (b.role === 'owner') return 1;
                     // Then admins
-                    if (a.role === 'admin' && b.role !== 'admin') return -1;
-                    if (a.role !== 'admin' && b.role === 'admin') return 1;
+                    if (isAdminRole(a.role) && !isAdminRole(b.role)) return -1;
+                    if (!isAdminRole(a.role) && isAdminRole(b.role)) return 1;
                     return 0;
                   }).map(u => (
                     <tr key={u.username}>
                       <td>{u.role === 'owner' ? '👑 ' : ''}{u.username}</td>
-                      <td><span className={`role-badge ${u.role}`}>{u.role === 'owner' ? '👑 Владелец' : u.role === 'admin' ? 'Админ' : 'Юзер'}</span></td>
+                      <td><span className={`role-badge ${u.role}`}>{u.role === 'owner' ? '👑 Владелец' : ROLE_LABEL[u.role] || 'Юзер'}</span></td>
                       <td>{u.score || 0}</td>
                       <td>{u.muted ? `🔇 ${u.muteReason}` : '✅'}</td>
                       <td className="actions-cell">
@@ -1518,6 +1580,51 @@
                 <input type="number" className="admin-input" placeholder="Сумма" value={addCoinAmount} onChange={e => setAddCoinAmount(e.target.value)} />
                 <button className="admin-add-btn" onClick={handleAddCoins}>Начислить</button>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'admins' && (
+            <div className="admins-list">
+              <h3>Админы</h3>
+              { !isAdminRole(currentUser.role) && currentUser.role !== 'owner' ? (
+                <p>Только для админов</p>
+              ) : (
+                <table className="user-table">
+                  <thead><tr><th>Ник</th><th>Роль</th><th>Действия</th></tr></thead>
+                  <tbody>
+                    {users.filter(u => isAdminRole(u.role) || u.role === 'owner').sort((a,b) => (ROLE_RANK[b.role]||0)-(ROLE_RANK[a.role]||0)).map(u => (
+                      <tr key={u.username}>
+                        <td>{u.role === 'owner' ? '👑 ' : ''}{u.username}</td>
+                        <td><span className={`role-badge ${u.role}`}>{ROLE_LABEL[u.role] || u.role}</span></td>
+                        <td>
+                          {u.role === 'owner' && <span>Владелец сервера</span>}
+                          {u.role !== 'owner' && (
+                            <>
+                              <select value={u.role} onChange={e => handleChangeRole(u.username, e.target.value)}>
+                                <option value={u.role}>{ROLE_LABEL[u.role] || u.role}</option>
+                                {availablePromotionRoles(currentUser.role).map(r => (
+                                  <option key={r} value={r}>{ROLE_LABEL[r]}</option>
+                                ))}
+                                <option value="player">Снять администратора</option>
+                              </select>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'owner' && (
+            <div className="owner-panel">
+              {currentUser.role === 'owner' ? (
+                <div><h3>Владелец</h3><p>Владелец пока-что отдыхает</p></div>
+              ) : (
+                <p>Только для владельца</p>
+              )}
             </div>
           )}
 
@@ -1694,7 +1801,7 @@
             </div>
             <nav className="sidebar-nav">
               <button className={`sidebar-btn ${activeTab === 'home' && !showReport ? 'active' : ''}`} onClick={() => { setActiveTab('home'); setShowReport(false); }}>🏠 Дом</button>
-              {(user.role === 'admin' || user.role === 'owner') ? (
+              {((user.role && user.role !== 'user' && user.role !== 'player')) ? (
                 <button className={`sidebar-btn ${activeTab === 'battle' ? 'active' : ''}`} onClick={() => { setActiveTab('battle'); setShowReport(false); }}>⚔️ Pixel Battle</button>
               ) : (
                 <div className="sidebar-btn-locked" title="в разработке...">
@@ -1702,7 +1809,7 @@
                   ⚔️ Pixel Battle
                 </div>
               )}
-              {(user.role === 'admin' || user.role === 'owner') && (
+              {((user.role && user.role !== 'user' && user.role !== 'player')) && (
                 <button className={`sidebar-btn ${activeTab === 'admin' && !showReport ? 'active' : ''}`} onClick={() => { setActiveTab('admin'); setShowReport(false); }}>🔧 Админ-панель</button>
               )}
               <button className={`sidebar-btn ${showReport ? 'active' : ''}`} onClick={() => { setShowReport(true); setActiveTab(''); }}>📋 Репорт</button>
@@ -1767,7 +1874,7 @@
       const isInitializedRef = useRef(false);
 
       const currentUser = getCurrentUser();
-      const isAdmin = currentUser?.role === 'admin';
+      const isAdmin = currentUser && currentUser.role && currentUser.role !== 'user' && currentUser.role !== 'player';
       const infinitePaintEnabled = getInfinitePaint() && isAdmin;
       const minZoom = 1.0;
       const maxZoom = 5.0;
