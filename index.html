@@ -9,6 +9,11 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <!-- Babel для JSX -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+  <!-- Подключаем Firebase Core и Auth старым надежным способом -->
+  <script src="https://gstatic.com"></script>
+  <script src="https://gstatic.com"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.3.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.3.1/firebase-auth-compat.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
   <style>
     /* ========== СТИЛИ (всё из App.css) ========== */
@@ -501,6 +506,19 @@
   <script type="text/babel">
     const { useState, useEffect, useRef, useCallback } = React;
 
+    // --------------- Firebase инициализация ---------------
+    const firebaseConfig = {
+      apiKey: "AIzaSy...",
+      authDomain: "://firebaseapp.com",
+      projectId: "твой-проект",
+      storageBucket: "://appspot.com",
+      messagingSenderId: "12345678",
+      appId: "1:1234:web:abcd"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+
     // --------------- localStorage helpers ---------------
     const USERS_KEY = 'dom_users';
     const CURRENT_USER_KEY = 'dom_currentUser';
@@ -602,6 +620,43 @@
 
     const saveReports = (reports) => localStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
 
+    // --------------- Firebase REST API helpers ---------------
+    const FIREBASE_DB = 'https://dom1k-ec9a5.firebaseio.com';
+
+    const saveUserToFirebase = async (user) => {
+      try {
+        const email = user.email.replace(/[.#$/\[\]]/g, '_');
+        const response = await fetch(`${FIREBASE_DB}/users/${email}.json`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(user)
+        });
+        if (response.ok) {
+          console.log('✓ Пользователь сохранён в Firebase:', user.email);
+        }
+      } catch (error) {
+        console.warn('⚠️ Firebase save error:', error.message);
+        // Продолжаем работу с localStorage
+      }
+    };
+
+    const loadUserFromFirebase = async (email) => {
+      try {
+        const emailKey = email.replace(/[.#$/\[\]]/g, '_');
+        const response = await fetch(`${FIREBASE_DB}/users/${emailKey}.json`);
+        if (response.ok) {
+          const user = await response.json();
+          if (user) {
+            console.log('✓ Пользователь загружен из Firebase:', email);
+            return user;
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ Firebase load error:', error.message);
+      }
+      return null;
+    };
+
     // --------------- Палитра цветов ---------------
     const colorPalette = [
       ['#FFFFFF', '#C0C0C0', '#808080', '#000000'],
@@ -676,7 +731,7 @@
       };
 
       // Обработка регистрации - этап 2
-      const handleRegisterStep2 = () => {
+      const handleRegisterStep2 = async () => {
         if (!displayName.trim()) {
           setError('Введи отображаемое имя');
           return;
@@ -695,6 +750,14 @@
           return;
         }
 
+        try {
+          await auth.createUserWithEmailAndPassword(email.trim(), password.trim());
+          alert('Пользователь зарегистрирован в Firebase!');
+        } catch (error) {
+          setError(error.message);
+          return;
+        }
+
         // Создаём нового пользователя
         const newUser = {
           email: email.trim(),
@@ -710,21 +773,46 @@
         };
         users.push(newUser);
         saveUsers(users);
+        
+        // Сохраняем в Firebase параллельно
+        saveUserToFirebase(newUser);
+        
         setCurrentUser(newUser);
         onStart(newUser);
       };
 
       // Обработка входа
-      const handleLogin = () => {
+      const handleLogin = async () => {
         if (!email.trim() || !password.trim()) {
           setError('Заполни все поля');
           return;
         }
-        const users = loadUsers();
-        const user = users.find(u => u.email === email.trim() && u.password === password.trim());
-        if (!user) {
-          setError('Неверный e-mail или пароль');
+        try {
+          await auth.signInWithEmailAndPassword(email.trim(), password.trim());
+          alert('Успешный вход через Firebase!');
+        } catch (error) {
+          setError(error.message);
           return;
+        }
+
+        const users = loadUsers();
+        let user = users.find(u => u.email === email.trim() && u.password === password.trim());
+        if (!user) {
+          const fallbackUsername = email.trim().split('@')[0].replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase() || 'user';
+          user = {
+            email: email.trim(),
+            password: password.trim(),
+            username: fallbackUsername,
+            displayName: email.trim(),
+            role: 'user',
+            score: 0,
+            balance: 0,
+            clan: null,
+            muted: false,
+            muteReason: ''
+          };
+          users.push(user);
+          saveUsers(users);
         }
         setCurrentUser(user);
         onStart(user);
@@ -1121,6 +1209,10 @@
           users[idx].balance = (users[idx].balance || 0) + amount;
           saveUsers(users);
           const updated = { ...user, balance: users[idx].balance };
+          
+          // Сохраняем обновленные данные в Firebase
+          saveUserToFirebase(updated);
+          
           setCurrentUser(updated);
           onUserUpdate(updated);
         }
@@ -1184,6 +1276,10 @@
           users[idx].clan = trimmed;
           saveUsers(users);
           const updated = { ...user, balance: users[idx].balance, clan: trimmed };
+          
+          // Сохраняем в Firebase
+          saveUserToFirebase(updated);
+          
           setCurrentUser(updated);
           onUserUpdate(updated);
           setMessage(`Клан "${trimmed}" создан!`);
@@ -1257,8 +1353,14 @@
       const handleMute = (username) => {
         const reason = prompt('Введите причину мута:');
         if (reason === null) return;
+        const updatedUser = users.find(u => u.username === username);
+        if (updatedUser) {
+          updatedUser.muted = true;
+          updatedUser.muteReason = reason;
+        }
         const updatedUsers = users.map(u => u.username === username ? { ...u, muted: true, muteReason: reason } : u);
         saveUsers(updatedUsers);
+        if (updatedUser) saveUserToFirebase(updatedUser);
         refreshUsers();
         if (username === currentUser.username) {
           setCurrentUser({ ...currentUser, muted: true, muteReason: reason });
@@ -1268,8 +1370,14 @@
       };
 
       const handleUnmute = (username) => {
+        const updatedUser = users.find(u => u.username === username);
+        if (updatedUser) {
+          updatedUser.muted = false;
+          updatedUser.muteReason = '';
+        }
         const updatedUsers = users.map(u => u.username === username ? { ...u, muted: false, muteReason: '' } : u);
         saveUsers(updatedUsers);
+        if (updatedUser) saveUserToFirebase(updatedUser);
         refreshUsers();
         if (username === currentUser.username) {
           setCurrentUser({ ...currentUser, muted: false, muteReason: '' });
@@ -1289,8 +1397,13 @@
           setMessage('Неверная сумма');
           return;
         }
+        const updatedUser = users.find(u => u.username === addCoinUser);
+        if (updatedUser) {
+          updatedUser.balance = (updatedUser.balance || 0) + amount;
+        }
         const updatedUsers = users.map(u => u.username === addCoinUser ? { ...u, balance: (u.balance || 0) + amount } : u);
         saveUsers(updatedUsers);
+        if (updatedUser) saveUserToFirebase(updatedUser);
         refreshUsers();
         setAddCoinUser('');
         setAddCoinAmount('');
@@ -2004,7 +2117,13 @@ useEffect(() => {
       );
     };
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    try {
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+      console.log('✓ React app mounted successfully');
+    } catch (error) {
+      console.error('✗ React render error:', error);
+      document.getElementById('root').innerHTML = '<div style="color: red; padding: 20px; font-family: monospace;">Ошибка при загрузке приложения. Проверьте консоль (F12).</div>';
+    }
   </script>
 </body>
 </html>
