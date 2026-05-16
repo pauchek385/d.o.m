@@ -791,7 +791,6 @@
         }
         try {
           await auth.signInWithEmailAndPassword(email.trim(), password.trim());
-          alert('Успешный вход через Firebase!');
         } catch (error) {
           setError(error.message);
           return;
