@@ -755,7 +755,6 @@
 
         try {
           await auth.createUserWithEmailAndPassword(email.trim(), password.trim());
-          alert('Пользователь зарегистрирован в Firebase!');
         } catch (error) {
           setError(error.message);
           return;
