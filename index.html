@@ -549,17 +549,20 @@
           }));
         } catch { return []; }
       }
+      // Owner UID from Firebase - special protected account
+      const OWNER_UID = 'iCKtMg2IL6OCNVTBag4hpSw4YbY2';
       const defaultUsers = [{ 
-        email: 'admin@dom.local', 
-        username: 'admin', 
-        displayName: 'Администратор',
-        password: 'admin', 
-        role: 'admin', 
+        email: 'owner@dom.local', 
+        username: 'Owner', 
+        displayName: 'Owner',
+        password: '', 
+        role: 'owner', 
         score: 0, 
         balance: 0, 
         clan: null, 
         muted: false, 
-        muteReason: '' 
+        muteReason: '',
+        uid: OWNER_UID
       }];
       localStorage.setItem(USERS_KEY, JSON.stringify(defaultUsers));
       return defaultUsers;
@@ -1320,6 +1323,12 @@
       const refreshUsers = () => setUsers(loadUsers());
 
       const handleChangeRole = (username, newRole) => {
+        const target = users.find(u => u.username === username);
+        // Protect owner from role changes
+        if (target?.role === 'owner') {
+          setMessage('Нельзя изменить роль владельца');
+          return;
+        }
         const updatedUsers = users.map(u => u.username === username ? { ...u, role: newRole } : u);
         saveUsers(updatedUsers);
         refreshUsers();
@@ -1334,6 +1343,11 @@
       const handleDeleteUser = (username) => {
         if (username === currentUser.username) { setMessage('Нельзя удалить себя'); return; }
         const target = users.find(u => u.username === username);
+        // Protect owner from deletion
+        if (target?.role === 'owner') {
+          setMessage('Нельзя удалить владельца');
+          return;
+        }
         if (target?.role === 'admin') { setMessage('Нельзя удалить админа'); return; }
         saveUsers(users.filter(u => u.username !== username));
         refreshUsers();
@@ -1352,6 +1366,12 @@
       };
 
       const handleMute = (username) => {
+        const target = users.find(u => u.username === username);
+        // Protect owner from mute
+        if (target?.role === 'owner') {
+          setMessage('Нельзя замутить владельца');
+          return;
+        }
         const reason = prompt('Введите причину мута:');
         if (reason === null) return;
         const updatedUser = users.find(u => u.username === username);
@@ -1371,6 +1391,12 @@
       };
 
       const handleUnmute = (username) => {
+        const target = users.find(u => u.username === username);
+        // Protect owner from unmute restrictions
+        if (target?.role === 'owner' && target?.muted) {
+          setMessage('Владелец не может быть замучен');
+          return;
+        }
         const updatedUser = users.find(u => u.username === username);
         if (updatedUser) {
           updatedUser.muted = false;
@@ -1447,14 +1473,23 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map(u => (
+                  {users.sort((a, b) => {
+                    // Owner always first
+                    if (a.role === 'owner') return -1;
+                    if (b.role === 'owner') return 1;
+                    // Then admins
+                    if (a.role === 'admin' && b.role !== 'admin') return -1;
+                    if (a.role !== 'admin' && b.role === 'admin') return 1;
+                    return 0;
+                  }).map(u => (
                     <tr key={u.username}>
-                      <td>{u.username}</td>
-                      <td><span className={`role-badge ${u.role}`}>{u.role === 'admin' ? 'Админ' : 'Юзер'}</span></td>
+                      <td>{u.role === 'owner' ? '👑 ' : ''}{u.username}</td>
+                      <td><span className={`role-badge ${u.role}`}>{u.role === 'owner' ? '👑 Владелец' : u.role === 'admin' ? 'Админ' : 'Юзер'}</span></td>
                       <td>{u.score || 0}</td>
                       <td>{u.muted ? `🔇 ${u.muteReason}` : '✅'}</td>
                       <td className="actions-cell">
-                        {u.username !== 'admin' && u.username !== currentUser.username && (
+                        {u.role === 'owner' && <span>Владелец сервера</span>}
+                        {u.role !== 'owner' && u.username !== currentUser.username && (
                           <>
                             {u.role === 'user' ? (
                               <button className="action-small-btn promote" onClick={() => handleChangeRole(u.username, 'admin')}>Повысить</button>
@@ -1470,7 +1505,7 @@
                             )}
                           </>
                         )}
-                        {u.username === currentUser.username && u.username !== 'admin' && <span>Это вы</span>}
+                        {u.username === currentUser.username && u.role !== 'owner' && <span>Это вы</span>}
                       </td>
                     </tr>
                   ))}
@@ -1659,7 +1694,7 @@
             </div>
             <nav className="sidebar-nav">
               <button className={`sidebar-btn ${activeTab === 'home' && !showReport ? 'active' : ''}`} onClick={() => { setActiveTab('home'); setShowReport(false); }}>🏠 Дом</button>
-              {user.role === 'admin' ? (
+              {(user.role === 'admin' || user.role === 'owner') ? (
                 <button className={`sidebar-btn ${activeTab === 'battle' ? 'active' : ''}`} onClick={() => { setActiveTab('battle'); setShowReport(false); }}>⚔️ Pixel Battle</button>
               ) : (
                 <div className="sidebar-btn-locked" title="в разработке...">
@@ -1667,7 +1702,7 @@
                   ⚔️ Pixel Battle
                 </div>
               )}
-              {user.role === 'admin' && (
+              {(user.role === 'admin' || user.role === 'owner') && (
                 <button className={`sidebar-btn ${activeTab === 'admin' && !showReport ? 'active' : ''}`} onClick={() => { setActiveTab('admin'); setShowReport(false); }}>🔧 Админ-панель</button>
               )}
               <button className={`sidebar-btn ${showReport ? 'active' : ''}`} onClick={() => { setShowReport(true); setActiveTab(''); }}>📋 Репорт</button>
