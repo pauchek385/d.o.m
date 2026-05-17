@@ -726,45 +726,25 @@
 
       // Обработка регистрации - этап 2
       const handleRegisterStep2 = async () => {
-  // 1. Базовая валидация
-  if (!displayName.trim()) {
-    setError('Введи отображаемое имя');
-    return;
-  }
-  if (!username.trim()) {
-    setError('Введи никнейм');
-    return;
-  }
-  if (!isValidUsername(username)) {
-    setError('Никнейм: 3-16 символов (латиница, цифры, _)');
-    return;
-  }
+  // Простая валидация
+  if (!displayName.trim()) return setError('Введи отображаемое имя');
+  if (!username.trim()) return setError('Введи никнейм');
+  if (!isValidUsername(username)) return setError('Никнейм: 3-16 символов (латиница, цифры, _)');
+
   const users = loadUsers();
   if (users.find(u => u.username === username.trim().toLowerCase())) {
-    setError('Этот никнейм уже занят');
-    return;
+    return setError('Этот никнейм уже занят');
   }
 
-  // 2. Блокируем кнопку, чтобы избежать двойного нажатия
   setError('⏳ Создаю аккаунт...');
 
   try {
-    // 3. Регистрируем в Firebase
+    // 1. Только Firebase Auth
     const userCredential = await auth.createUserWithEmailAndPassword(email.trim(), password.trim());
     const uid = userCredential.user.uid;
     const assignedRole = uid === OWNER_UID ? 'owner' : 'user';
 
-    // 4. Firestore (не критично для входа)
-    try {
-      await db.collection("users").doc(uid).set({
-        email: email.trim(),
-        role: assignedRole
-      });
-    } catch (e) {
-      console.warn('Firestore save error:', e.message);
-    }
-
-    // 5. Создаём локального пользователя
+    // 2. Сохраняем пользователя ТОЛЬКО в localStorage
     const newUser = {
       email: email.trim(),
       password: password.trim(),
@@ -782,22 +762,12 @@
     saveUsers(users);
     setCurrentUser(newUser);
 
-    // 6. Пытаемся сохранить в REST API (не обязательно)
-    saveUserToFirebase(newUser).catch(e => console.warn('REST save skipped:', e.message));
-
-    // 7. Успех — переходим в игру
-    setError('');
+    // 3. Сразу в игру
     onStart(newUser);
 
   } catch (error) {
-    // Показываем понятную ошибку
-    if (error.code === 'auth/email-already-in-use') {
-      setError('Этот e-mail уже зарегистрирован');
-    } else if (error.code === 'auth/weak-password') {
-      setError('Пароль слишком простой (минимум 6 символов)');
-    } else {
-      setError(error.message);
-    }
+    // Показываем ошибку
+    setError(error.message);
   }
 };
 
