@@ -746,7 +746,7 @@
           return;
         }
 
-        try {
+                try {
           await auth.createUserWithEmailAndPassword(email.trim(), password.trim());
         } catch (error) {
           setError(error.message);
@@ -764,6 +764,18 @@
             email: email.trim(),
             role: assignedRole
           });
+          
+          // === ОСЬ ЦЕЙ ШМАТОК МИ ДОДАЄМО ===
+          alert("Реєстрація успішна! Тепер ви можете увійти.");
+          
+          // Варіант 1: Якщо у тебе звичайні сторінки, перекидаємо на сторінку входу
+          window.location.href = "login.html"; 
+          
+          // Варіант 2: Якщо це React (все на одному екрані), попросимо очистити поля
+          // setEmail('');
+          // setPassword('');
+          // =================================
+          
         } catch (error) {
           console.warn('Firestore save error:', error.message);
         }
