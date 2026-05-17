@@ -726,76 +726,69 @@
 
       // Обработка регистрации - этап 2
       const handleRegisterStep2 = async () => {
-        if (!displayName.trim()) {
-          setError('Введи отображаемое имя');
-          return;
-        }
-        if (!username.trim()) {
-          setError('Введи никнейм');
-          return;
-        }
-        if (!isValidUsername(username)) {
-          setError('Никнейм: 3-16 символов (латиница, цифры, _)');
-          return;
-        }
-        const users = loadUsers();
-        if (users.find(u => u.username === username.trim().toLowerCase())) {
-          setError('Этот никнейм уже занят');
-          return;
-        }
+  if (!displayName.trim()) {
+    setError('Введи отображаемое имя');
+    return;
+  }
+  if (!username.trim()) {
+    setError('Введи никнейм');
+    return;
+  }
+  if (!isValidUsername(username)) {
+    setError('Никнейм: 3-16 символов (латиница, цифры, _)');
+    return;
+  }
+  const users = loadUsers();
+  if (users.find(u => u.username === username.trim().toLowerCase())) {
+    setError('Этот никнейм уже занят');
+    return;
+  }
 
-                try {
-          await auth.createUserWithEmailAndPassword(email.trim(), password.trim());
-        } catch (error) {
-          setError(error.message);
-          return;
-        }
+  try {
+    // Создаём пользователя в Firebase и сразу получаем uid
+    const userCredential = await auth.createUserWithEmailAndPassword(email.trim(), password.trim());
+    const uid = userCredential.user.uid;
+    const assignedRole = uid === OWNER_UID ? 'owner' : 'user';
 
-        // Map Firebase UID to owner if it matches
-        const fbUser = auth.currentUser;
-        const uid = fbUser?.uid;
-        const assignedRole = uid === OWNER_UID ? 'owner' : 'user';
+    // Запись в Firestore (не блокирует регистрацию)
+    try {
+      await db.collection("users").doc(uid).set({
+        email: email.trim(),
+        role: assignedRole
+      });
+    } catch (firestoreError) {
+      console.warn('Firestore save error (non-critical):', firestoreError.message);
+    }
 
-        // Save to Firestore
-        try {
-          await db.collection("users").doc(uid).set({
-            email: email.trim(),
-            role: assignedRole
-          });
-           
-          
-          // Варіант 2: Якщо це React (все на одному екрані), попросимо очистити поля
-          // setEmail('');
-          // setPassword('');
-          // =================================
-          
-        } catch (error) {
-          console.warn('Firestore save error:', error.message);
-        }
+    // Создаём пользователя локально
+    const newUser = {
+      email: email.trim(),
+      password: password.trim(),
+      username: username.trim().toLowerCase(),
+      displayName: displayName.trim(),
+      role: assignedRole,
+      uid: uid,
+      score: 0,
+      balance: 0,
+      clan: null,
+      muted: false,
+      muteReason: ''
+    };
+    users.push(newUser);
+    saveUsers(users);
+    setCurrentUser(newUser);
+    
+    // Пробуем сохранить в REST API (не критично)
+    saveUserToFirebase(newUser).catch(e => console.warn('REST save skipped:', e.message));
 
-        // Создаём нового пользователя
-        const newUser = {
-          email: email.trim(),
-          password: password.trim(),
-          username: username.trim().toLowerCase(),
-          displayName: displayName.trim(),
-          role: assignedRole,
-          uid: uid || null,
-          score: 0,
-          balance: 0,
-          clan: null,
-          muted: false,
-          muteReason: ''
-        };
-        users.push(newUser);
-        saveUsers(users);
-        
-        // Сохраняем в Firebase REST API параллельно
-        saveUserToFirebase(newUser);
-        
-        setCurrentUser(newUser);
-        onStart(newUser);
-      };
+    // Переходим в игру
+    onStart(newUser);
+
+  } catch (error) {
+    // Показываем ошибку Firebase (например, слабый пароль или email уже используется)
+    setError(error.message);
+  }
+};
 
       // Обработка входа
       const handleLogin = async () => {
