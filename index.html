@@ -726,6 +726,7 @@
 
       // Обработка регистрации - этап 2
       const handleRegisterStep2 = async () => {
+  // 1. Базовая валидация
   if (!displayName.trim()) {
     setError('Введи отображаемое имя');
     return;
@@ -744,23 +745,26 @@
     return;
   }
 
+  // 2. Блокируем кнопку, чтобы избежать двойного нажатия
+  setError('⏳ Создаю аккаунт...');
+
   try {
-    // Создаём пользователя в Firebase и сразу получаем uid
+    // 3. Регистрируем в Firebase
     const userCredential = await auth.createUserWithEmailAndPassword(email.trim(), password.trim());
     const uid = userCredential.user.uid;
     const assignedRole = uid === OWNER_UID ? 'owner' : 'user';
 
-    // Запись в Firestore (не блокирует регистрацию)
+    // 4. Firestore (не критично для входа)
     try {
       await db.collection("users").doc(uid).set({
         email: email.trim(),
         role: assignedRole
       });
-    } catch (firestoreError) {
-      console.warn('Firestore save error (non-critical):', firestoreError.message);
+    } catch (e) {
+      console.warn('Firestore save error:', e.message);
     }
 
-    // Создаём пользователя локально
+    // 5. Создаём локального пользователя
     const newUser = {
       email: email.trim(),
       password: password.trim(),
@@ -777,16 +781,23 @@
     users.push(newUser);
     saveUsers(users);
     setCurrentUser(newUser);
-    
-    // Пробуем сохранить в REST API (не критично)
+
+    // 6. Пытаемся сохранить в REST API (не обязательно)
     saveUserToFirebase(newUser).catch(e => console.warn('REST save skipped:', e.message));
 
-    // Переходим в игру
+    // 7. Успех — переходим в игру
+    setError('');
     onStart(newUser);
 
   } catch (error) {
-    // Показываем ошибку Firebase (например, слабый пароль или email уже используется)
-    setError(error.message);
+    // Показываем понятную ошибку
+    if (error.code === 'auth/email-already-in-use') {
+      setError('Этот e-mail уже зарегистрирован');
+    } else if (error.code === 'auth/weak-password') {
+      setError('Пароль слишком простой (минимум 6 символов)');
+    } else {
+      setError(error.message);
+    }
   }
 };
 
